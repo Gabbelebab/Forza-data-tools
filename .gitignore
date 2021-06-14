@@ -1,4 +1,7 @@
 testing/*
 *.csv
+fdt.exe
 fdt
-.DS_Store
+test.cmd
+build.cmd
+Keep/*

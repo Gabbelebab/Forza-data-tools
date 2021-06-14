@@ -8,9 +8,9 @@ Building some tools for playing with the UDP data out feature from the Forza Mot
 - Realtime telemetry output to terminal  
 - Telemetry data logging to csv file  
 - Serve Forza Telemetry data as JSON over HTTP
-- Display race statistics from race/drive (when logging to CSV)  
-
-
+- Display race statistics from race/drive (when logging to CSV)
+- *Telemetry data logging to JSON file  
+- *Pass JSON object to another process running on IP:UDP
 
 (Feel free to open an issue if you have any suggestions/feature requests)
 &nbsp;
@@ -28,11 +28,12 @@ Compile the application with: `go build -o fdt`
 
 ## Run
 ### Command line options
-Specify a CSV file to log to: `-c log.csv` (File will be overwritten if it exists)    
-Enable support for Forza Horizon: `-z`    
-Enable JSON server: `-j`   
-Disable realtime terminal output: `-q`   
+Specify a CSV file to log to: `-c log.csv` (File will be overwritten if it exists)
+Enable support for Forza Horizon: `-z`
+Enable JSON server: `-j`
+Disable realtime terminal output: `-q`
 Enable debug information: `-d`
+Specify a JSON file to log to: `-f log.json` (File will be overwritten if it exists)
 
 &nbsp;
 

@@ -3,30 +3,29 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
+	"encoding/json"
 	"flag"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"math"
 	"net"
-
-	// "time"
-	// "strconv"
-	"io/ioutil"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
-
-	// "encoding/csv"
-	// "sort"
-	"encoding/json"
 )
 
-const hostname = "0.0.0.0"            // Address to listen on (0.0.0.0 = all interfaces)
-const port = "9999"                   // UDP Port number to listen on
-const service = hostname + ":" + port // Combined hostname+port
+//const hostname = "0.0.0.0" // Address to listen on (0.0.0.0 = all interfaces)
+//const port = "9999"        // UDP Port number to listen on
+//const service = hostname + ":" + port // Combined hostname+port
 
 var jsonData string // Stores the JSON data to be sent out via the web server if enabled
+var debugMode bool
+
+//var localIP = "0.0.0.0"
+//var localUDP = "13139"
 
 // Telemetry struct represents a piece of telemetry as defined in the Forza data format (see the .dat files)
 type Telemetry struct {
@@ -38,7 +37,7 @@ type Telemetry struct {
 }
 
 // readForzaData processes recieved UDP packets
-func readForzaData(conn *net.UDPConn, telemArray []Telemetry, csvFile string) {
+func readForzaData(conn *net.UDPConn, telemArray []Telemetry, csvFile string, jsonFile string) {
 	buffer := make([]byte, 1500)
 
 	n, addr, err := conn.ReadFromUDP(buffer)
@@ -46,7 +45,7 @@ func readForzaData(conn *net.UDPConn, telemArray []Telemetry, csvFile string) {
 		log.Fatal("Error reading UDP data:", err, addr)
 	}
 
-	if isFlagPassed("d") == true { // Print extra connection info if debugMode set
+	if debugMode { // Print extra connection info if debugMode set
 		log.Println("UDP client connected:", addr)
 		// fmt.Printf("Raw Data from UDP client:\n%s", string(buffer[:n])) // Debug: Dump entire received buffer
 	}
@@ -68,7 +67,7 @@ func readForzaData(conn *net.UDPConn, telemArray []Telemetry, csvFile string) {
 	for i, T := range telemArray {
 		data := buffer[:n][T.startOffset:T.endOffset] // Process received data in chunks based on byte offsets
 
-		if isFlagPassed("d") == true { // if debugMode, print received data in each chunk
+		if debugMode { // if debugMode, print received data in each chunk
 			log.Printf("Data chunk %d: %v (%s) (%s)", i, data, T.name, T.dataType)
 		}
 
@@ -101,28 +100,13 @@ func readForzaData(conn *net.UDPConn, telemArray []Telemetry, csvFile string) {
 	}
 
 	// Print received data to terminal (if not in quiet mode):
-	if isFlagPassed("q") == false {
+	if isFlagPassed("q") {
 		// Convert slip values to ints as the precision of a float means a neutral state is rarely reported
 		totalSlipRear := int(f32map["TireCombinedSlipRearLeft"] + f32map["TireCombinedSlipRearRight"])
 		totalSlipFront := int(f32map["TireCombinedSlipFrontLeft"] + f32map["TireCombinedSlipFrontRight"])
 		carAttitude := CheckAttitude(totalSlipFront, totalSlipRear)
 
 		log.Printf("RPM: %.0f \t Gear: %d \t BHP: %.0f \t Speed: %.0f \t Total slip: %.0f \t Attitude: %s", f32map["CurrentEngineRpm"], u8map["Gear"], (f32map["Power"] / 745.7), (f32map["Speed"] * 2.237), (f32map["TireCombinedSlipRearLeft"] + f32map["TireCombinedSlipRearRight"]), carAttitude)
-
-		// Testing traction control sensors:
-		// log.Printf("TireSlipRatioFrontLeft: %.0f TireSlipRatioFrontRight %.0f", f32map["TireSlipRatioFrontLeft"], f32map["TireSlipRatioFrontRight"])
-		// log.Printf("TireSlipAngleFrontLeft: %.0f TireSlipAngleFrontRight %.0f", f32map["TireSlipAngleFrontLeft"], f32map["TireSlipAngleFrontRight"])
-		// log.Printf("TireCombinedSlipFrontLeft: %.0f TireCombinedSlipFrontRight %.0f", f32map["TireCombinedSlipFrontLeft"], f32map["TireCombinedSlipFrontRight"])
-
-		// log.Printf("TireSlipRatioRearLeft: %.0f TireSlipRatioRearRight %.0f", f32map["TireSlipRatioRearLeft"], f32map["TireSlipRatioRearRight"])
-		// log.Printf("TireSlipAngleRearLeft: %.0f TireSlipAngleRearRight %.0f", f32map["TireSlipAngleRearLeft"], f32map["TireSlipAngleRearRight"])
-		// log.Printf("TireCombinedSlipRearLeft: %.0f TireCombinedSlipRearRight %.0f", f32map["TireCombinedSlipRearLeft"], f32map["TireCombinedSlipRearRight"])
-
-		// Testing other sensors
-		// log.Printf("AccelerationX: %.0f", f32map["AccelerationX"])
-		// log.Printf("AccelerationZ: %.0f", f32map["AccelerationZ"])
-		// log.Printf("DistanceTraveled: %.0f", f32map["DistanceTraveled"])
-
 		// "Traction control" if slip higher than threshold and not understeering
 		if (totalSlipRear+totalSlipFront) > 2 && carAttitude == "Oversteer" { // Basic traction control detection testing where we allow slip up to a certain amount
 			log.Printf("TRACTION LOST!")
@@ -130,7 +114,7 @@ func readForzaData(conn *net.UDPConn, telemArray []Telemetry, csvFile string) {
 	}
 
 	// Write data to CSV file if enabled:
-	if isFlagPassed("c") == true {
+	if isFlagPassed("c") {
 		file, err := os.OpenFile(csvFile, os.O_WRONLY|os.O_APPEND, 0644)
 		check(err)
 		defer file.Close()
@@ -156,13 +140,11 @@ func readForzaData(conn *net.UDPConn, telemArray []Telemetry, csvFile string) {
 			}
 		}
 		csvLine += "\n"
-
-		// log.Println(csvLine[1:])
 		fmt.Fprintf(file, csvLine[1:]) // write new line to file
 	} // end of if CSV enabled
 
 	// Send data to JSON server if enabled:
-	if isFlagPassed("j") == true {
+	if isFlagPassed("s") {
 		var jsonArray [][]byte
 
 		s32json, _ := json.Marshal(s32map)
@@ -190,29 +172,56 @@ func readForzaData(conn *net.UDPConn, telemArray []Telemetry, csvFile string) {
 			} else {
 				jd = append(jd, ", "+string(j))
 			}
-
 		}
-
 		jsonData = fmt.Sprintf("%s", jd)
 
+		// Check if jsonFile enabled
+		//if isFlagPassed("f") {
+		//	jfile, err := os.OpenFile(jsonFile, os.O_WRONLY|os.O_APPEND, 0644)
+		//	check(err)
+		//	defer jfile.Close()
+		//	// log.Println(csvLine[1:])
+		//	fmt.Fprintf(jfile, "%s\n", jd) // write new line to file
+		//} // end of if jsonFile enabled
 	} // end of if jsonEnabled
 }
 
 func main() {
-	// Parse flags
-	csvFilePtr := flag.String("c", "", "Log data to given file in CSV format")
-	horizonPTR := flag.Bool("z", false, "Enables Forza Horizon 4 support (Will default to Forza Motorsport if unset)")
-	jsonPTR := flag.Bool("j", false, "Enables JSON HTTP server on port 8080")
-	noTermPTR := flag.Bool("q", false, "Disables realtime terminal output if set")
-	debugModePTR := flag.Bool("d", false, "Enables extra debug information if set")
-	flag.Parse()
-	csvFile := *csvFilePtr
-	horizonMode := *horizonPTR
-	jsonEnabled := *jsonPTR
-	noTerm := *noTermPTR
-	debugMode := *debugModePTR
+	var csvFile string
+	var horizonMode bool
+	var jsonEnabled bool
+	var jsonFile string
+	var noTerm bool
+	//var debugMode bool
+	var localUDP int
+	var localIP string
+	var elastic bool
+	var elasticIP string
+	var elasticPort int
 
-	SetupCloseHandler(csvFile) // handle CTRL+C
+	// Parse flags
+	flag.StringVar(&csvFile, "c", "", "Log data to given file in CSV format")
+	flag.BoolVar(&horizonMode, "z", false, "Enables Forza Horizon 4 support (Will default to Forza Motorsport if unset)")
+	flag.BoolVar(&jsonEnabled, "s", false, "Enables JSON HTTP server on port 8080")
+	flag.StringVar(&jsonFile, "j", "", "Log data to given file in JSON format")
+	flag.BoolVar(&noTerm, "q", true, "Disables realtime terminal output if set")
+	flag.BoolVar(&debugMode, "d", false, "Enables extra debug information if set")
+	flag.IntVar(&localUDP, "u", 9999, "UDP port to use. For future use!")
+	flag.StringVar(&localIP, "i", "0.0.0.0", "IP local Address to bind to. For future use!")
+	flag.BoolVar(&elastic, "e", false, "Forward to elastic. For future use!")
+	flag.StringVar(&elasticIP, "y", "127.0.0.1", "IP Address for elastic. For future use!")
+	flag.IntVar(&elasticPort, "p", 5600, "port for elastic stack. For future use!")
+	flag.Parse()
+
+	socketParms := localIP + ":" + strconv.Itoa(localUDP)
+	log.Printf("Debug PGB_01 socketparams: %s, %d.", localIP, localUDP)
+	log.Printf("Debug PGB_02 elastic     : %t, %s, %d.", elastic, elasticIP, elasticPort)
+	log.Printf("Debug PGB_03 json        : %t, %s.", jsonEnabled, jsonFile)
+	log.Printf("Debug PGB_04 cvs         : %s.", csvFile)
+	log.Printf("Debug PGB_05 d, q, z     : %t, %t, %t.", debugMode, noTerm, horizonMode)
+	//os.Exit(0)
+
+	SetupCloseHandler(csvFile, jsonFile) // handle CTRL+C
 
 	if debugMode {
 		log.Println("Debug mode enabled")
@@ -309,7 +318,7 @@ func main() {
 	log.Printf("Proccessed %d Telemetry types OK!", len(telemArray))
 
 	// Prepare CSV file if requested
-	if isFlagPassed("c") == true {
+	if isFlagPassed("c") {
 		log.Println("Logging data to", csvFile)
 
 		csvHeader := ""
@@ -323,13 +332,27 @@ func main() {
 		log.Println("CSV Logging disabled")
 	}
 
+	// Prepare JSON file if requested
+	if isFlagPassed("j") {
+		log.Println("Logging data to", jsonFile)
+
+		f, err := os.Create(jsonFile)
+		if err != nil {
+			check(err)
+		} else {
+			f.Close()
+		}
+	} else {
+		log.Println("JSON Logging disabled")
+	}
+
 	// Start JSON server if requested
 	if jsonEnabled {
 		go serveJSON()
 	}
 
 	// Setup UDP listener
-	udpAddr, err := net.ResolveUDPAddr("udp4", service)
+	udpAddr, err := net.ResolveUDPAddr("udp4", socketParms)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -338,11 +361,11 @@ func main() {
 	check(err)
 	defer listener.Close() // close after main ends - probably not really needed
 
-	// log.Printf("Forza data out server listening on %s, waiting for Forza data...\n", service)
-	log.Printf("Forza data out server listening on %s:%s, waiting for Forza data...\n", GetOutboundIP(), port)
+	// Show the listening socket info on the console.
+	log.Printf("Forza data out server listening on %s:%d, waiting for Forza data...\n", GetOutboundIP(), localUDP)
 
 	for { // main loop
-		readForzaData(listener, telemArray, csvFile) // Also pass telemArray to UDP function - might be a better way instea do of passing each time?
+		readForzaData(listener, telemArray, csvFile, jsonFile) // Also pass telemArray to UDP function - might be a better way instea do of passing each time?
 	}
 }
 
@@ -354,12 +377,12 @@ func init() {
 // Helper functions
 
 // SetupCloseHandler performs some clean up on exit (CTRL+C)
-func SetupCloseHandler(csvFile string) {
+func SetupCloseHandler(csvFile string, jsonFile string) {
 	c := make(chan os.Signal, 2)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-c
-		if isFlagPassed("c") == true { // Get stats if csv logging enabled
+		if isFlagPassed("c") { // Get stats if csv logging enabled
 			calcstats(csvFile)
 		}
 		fmt.Println("")
@@ -435,5 +458,4 @@ func CheckAttitude(totalSlipFront int, totalSlipRear int) string {
 		// log.Printf("Car balance is neutral")
 		return "Neutral"
 	}
-
 }
